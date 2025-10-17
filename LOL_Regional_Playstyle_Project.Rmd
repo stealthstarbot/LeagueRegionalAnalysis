@@ -1,0 +1,166 @@
+---
+title: "Regional Playstyle Differences 2023-2025 League of Legends"
+author: "Preston Jarvis"
+date: "2025-10-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages("tidyverse")
+#install.packages("ggthemes")
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(ggthemes)
+#install.packages("plotly")
+library(plotly)
+```
+### Step 1: Combining the Dataset
+```{r}
+data_2023 <- fread("Lol_data_2023.csv")
+data_2024 <- fread("Lol_data_2024.csv")
+data_2025 <- fread("Lol_data_2025.csv")
+matches <- rbindlist(list(data_2023, data_2024, data_2025), fill = TRUE)
+
+```
+```{r}
+#getwd()
+#list.files()
+```
+
+
+### Step 2: Inspect and Clean Match Data
+```{r}
+#dim(matches)
+#names(matches)
+#head(matches)
+#table(matches$league)
+#table(matches$year)
+#Saw that 2026 was included and realized the Oracle datasets were including planned events that did not happen and were autofilled above
+matches <- matches %>%
+  filter(year %in% c(2023, 2024, 2025))
+#table(matches$year)
+#table(matches$region)
+#unique(matches$league)
+
+```
+
+
+
+
+### Step 3:Mapping out Leagues to Regions and filtering 
+```{r}
+
+matches <- matches%>%
+  mutate(region = case_when(
+    league %in% c("LCK", "KR") ~ "LCK",
+    league %in% c("LCS", "LTA N", "LTA", "LCS Summer") ~ "LCS",
+    league %in% c("LEC", "EU") ~ "LEC",
+    league %in% c("LPL", "CN") ~ "LPL",
+    #is.na(league) ~ "LCS",
+    #league == "NA" ~ "LCS",
+    TRUE ~ "Other"  #All other regions labeled Other
+  )) 
+
+matches <- matches%>%
+  filter(region %in% c("LEC", "LCK", "LPL", "LCS"))
+table(matches$region)
+
+# I realized I had to adjust for the change from LCS to LTA N in 2025 making me call both LCS And LTA N in my overarching column mapping.
+```
+
+
+
+
+
+
+### Step 4: Prep the Data Most Important for Visualization
+```{r}
+regional_playstyle <- matches%>%
+  group_by(region,year)%>%
+  summarise(
+    avg_gamelength = mean(gamelength, na.rm=TRUE),
+      avg_kills_per_game = mean(kills, na.rm= TRUE),
+    deaths_per_game = mean(deaths, na.rm= TRUE),
+    avg_dragons = mean(dragons, na.rm= TRUE),
+    avg_barons = mean(barons, na.rm= TRUE),
+    avg_voidgrubs = mean(void_grubs, na.rm=TRUE),
+    firstblood_rate = mean(firstblood, na.rm= TRUE),
+    firstdragon_rate = mean(firstdragon, na.rm= TRUE),
+    avg_turret_plates = mean(opp_turretplates, na.rm=TRUE),
+    csdiff10_abs   = mean(abs(csdiffat10/2),   na.rm = TRUE),#For all of the csdiff and golddiffs I had to get the absolute value and divide by 2 as I was running into the issue of trying to compute the mean and wondering why it kept approaching 0. This was because in the dataset they are differentials of EACH TEAM meaning every single game would have equal differentials of positive and negative since one team is ahead by a certain amount and one team is behind, making it mathematically 0 even if intuitively one team would always be ahead and have a lead.
+    csdiff15_abs   = mean(abs(csdiffat15/2),   na.rm = TRUE),
+    golddiff10_abs = mean(abs(golddiffat10/2), na.rm = TRUE),
+    golddiff15_abs = mean(abs(golddiffat15/2), na.rm = TRUE),
+    avg_vision_control = mean(vspm, na.rm=TRUE), # For vision score particularly for people who do not play LoL, it is already computed and has various weights/modifiers depending on effective use of wards making it an extremely strong indicator of overall vision control
+    .groups = "drop"
+  )
+#Had to average all of the metrics I would want to visualize as the games played between regions as seen above is not even, so taking a lump sum would skew the data due to differing sample sizes.
+
+```
+### Step 4.5 Custom Metrics
+```{r}
+regional_playstyle <- regional_playstyle %>%
+  mutate(
+aggression_variable = (avg_kills_per_game +deaths_per_game)/avg_gamelength,
+
+objective_control = (avg_dragons + avg_barons),
+tempo = 1/avg_gamelength
+
+)
+```
+
+
+
+
+
+# Step 5: Quick R Visualizations 
+## Aggression
+```{r}
+
+p <- ggplot(regional_playstyle, 
+            aes(x = region, y = aggression_variable, fill = region,
+                text = paste("Region:", region,
+                             "<br>Year:", year,
+                             "<br>Aggression:", round(aggression_variable, 5)))) +
+  geom_col() +
+  facet_wrap(~year) +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+# As you can see from this interactive bar chart that LPL has a combined 0.05541 Aggression Variable being the highest and the LCK tends to have the lowest. Off first glance, it does not seem statistically significant as this variable is normalized taking into account game length as well.
+```
+## Objective Control
+```{r}
+  ggplot(regional_playstyle, aes(x = region, y = objective_control, fill = region)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~year) +
+  theme_economist() +
+  labs(title = "Objective Control by Region", y = "Objectives per Game", x = "Region")
+#Here we see LPL consistently contols objectives and takes more overall dragons and barons than other regions. Additonally, I did not want to add void grubs as it would skew the overall idea I wanted to pull from this graph, but by doing so we see a steady decline from 2024 to 2025 and this makes perfect sense as more and more teams learn to play around void grubs released in 2024 and the value of them being shown and proven, less teams will focus on other objectives such as drag and focus on the topside of the map where void grubs and rift herald are depending on several factors such as game state, MVP role, etc,.
+```
+## Gold Differential(-LPL)
+```{r}
+ggplot(regional_playstyle %>% filter(region != "LPL"), 
+       aes(x = region, y = golddiff15_abs, fill = region)) +
+  geom_col() +
+  facet_wrap(~year) +
+  theme_solarized() +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Gold Difference at 15 Minutes by Region (LPL Removed)",
+    x = "Region",
+    y = "Gold Difference at 15 Min"
+  )
+#Had to remove LPL due to the dataset not having any values or information from 2023-2025 on specific gold differentials at any given time or even other specific time values leading me to believe that Oracle does not report the "smaller" details for LPL specifically.
+#This graph is extremely interesting as not only do we see very little difference in the Gold Difference at 15 mins but we see a general trend downwards over the years which I was not expecting to see. I can only infer that this was from the overall trend of Riot consistently nerfing individual leads over time, decreasing snowballing, and allowing the game to become more dynamic and team-based by keeping overall team gold steady instead.
+```
+
+
+
+
+
+.
